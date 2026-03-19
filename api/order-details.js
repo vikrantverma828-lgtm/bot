@@ -10,8 +10,8 @@ export default async function handler(req, res) {
 
   try {
     // Step 1: Fetch Order
-    const orderRes = await fetch(
-      `https://${SHOP}/admin/api/2024-01/orders.json?name=${orderId}&status=any`,
+   const orderRes = await fetch(
+  `https://${SHOP}/admin/api/2024-01/orders.json?name=%23${orderId}&status=any`,
       {
         headers: {
           "X-Shopify-Access-Token": ACCESS_TOKEN,
