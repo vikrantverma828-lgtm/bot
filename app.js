@@ -4,6 +4,20 @@ const https = require('https');
 const SHOP = 'libasdelhi.myshopify.com';
 const ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
+console.log("Incoming request");
+
+const orderAPI = `https://${SHOP}/admin/api/2024-01/orders.json?name=%23${orderId}&status=any`;
+console.log("Calling Order API");
+
+const orderData = await fetchData(orderAPI);
+console.log("Order API Response Received");
+
+const metafieldAPI = `https://${SHOP}/admin/api/2024-01/orders/${order_id}/metafields.json?namespace=returnprime&key=lifecycle_data`;
+console.log("Calling Metafield API");
+
+const metafieldData = await fetchData(metafieldAPI);
+console.log("Metafield API Response Received");
+
 function fetchData(url) {
   return new Promise((resolve, reject) => {
     const options = {
