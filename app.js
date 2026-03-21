@@ -2,11 +2,13 @@ const http = require('http');
 const https = require('https');
 
 const SHOP = 'libasdelhi.myshopify.com';
-const ACCESS_TOKEN = "PASTE_YOUR_TOKEN_HERE"; // TEMP hardcoded
+const ACCESS_TOKEN = "PASTE_YOUR_TOKEN_HERE"; // TEMP for testing
 
+// ======================
+// SAFE FETCH FUNCTION
+// ======================
 function fetchData(url) {
   return new Promise((resolve, reject) => {
-
     const options = {
       headers: {
         'X-Shopify-Access-Token': ACCESS_TOKEN
@@ -16,28 +18,45 @@ function fetchData(url) {
     const req = https.get(url, options, (res) => {
       let data = '';
 
+      console.log("Status Code:", res.statusCode);
+
       res.on('data', chunk => data += chunk);
 
       res.on('end', () => {
+        console.log("Response received");
+
+        if (!data) {
+          return reject("Empty response");
+        }
+
         try {
           resolve(JSON.parse(data));
-        } catch {
+        } catch (err) {
+          console.log("Invalid JSON:", data);
           reject("Invalid JSON");
         }
       });
     });
 
-    req.on('error', reject);
+    req.on('error', (err) => {
+      console.log("HTTP Error:", err);
+      reject(err);
+    });
 
     req.setTimeout(5000, () => {
+      console.log("Timeout hit");
       req.destroy();
       reject("Timeout");
     });
-
   });
 }
 
+// ======================
+// SERVER
+// ======================
 const server = http.createServer(async (req, res) => {
+
+  console.log("Incoming request:", req.url);
 
   res.setHeader('Content-Type', 'application/json');
 
@@ -45,18 +64,20 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify({ message: "API running" }));
   }
 
-  console.log("Request:", req.url);
-
   const urlObj = new URL(req.url, `http://${req.headers.host}`);
   const orderId = urlObj.searchParams.get('orderId');
   const action = urlObj.searchParams.get('action');
 
   if (!orderId || !action) {
-    return res.end(JSON.stringify({ message: "Missing params" }));
+    return res.end(JSON.stringify({ message: "Missing parameters" }));
   }
 
   try {
-    // STEP 1: GET ORDER
+    // ======================
+    // STEP 1: FETCH ORDER
+    // ======================
+    console.log("Calling Order API...");
+
     const orderAPI = `https://${SHOP}/admin/api/2024-01/orders.json?name=%23${orderId}&status=any`;
     const orderData = await fetchData(orderAPI);
 
@@ -67,16 +88,20 @@ const server = http.createServer(async (req, res) => {
     const order = orderData.orders[0];
     const order_id = order.id;
 
-    // =====================
-    // ORDER STATUS
-    // =====================
+    console.log("Order found:", order_id);
+
+    // ======================
+    // CASE 1: ORDER STATUS
+    // ======================
     if (action === "order") {
+
+      console.log("Calling Fulfillment API...");
 
       const fulfilmentAPI = `https://${SHOP}/admin/api/2024-01/orders/${order_id}/fulfillments.json`;
       const fulfilmentData = await fetchData(fulfilmentAPI);
 
       if (!fulfilmentData.fulfillments || fulfilmentData.fulfillments.length === 0) {
-        return res.end(JSON.stringify({ message: "Not shipped yet" }));
+        return res.end(JSON.stringify({ message: "Order placed but not shipped yet" }));
       }
 
       const shipments = fulfilmentData.fulfillments.map(f => ({
@@ -87,14 +112,16 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ shipments }));
     }
 
-    // =====================
-    // FETCH METAFIELD
-    // =====================
+    // ======================
+    // STEP 2: FETCH METAFIELD
+    // ======================
+    console.log("Calling Metafield API...");
+
     const metafieldAPI = `https://${SHOP}/admin/api/2024-01/orders/${order_id}/metafields.json?namespace=returnprime&key=lifecycle_data`;
     const metafieldData = await fetchData(metafieldAPI);
 
     if (!metafieldData.metafields || metafieldData.metafields.length === 0) {
-      return res.end(JSON.stringify({ message: "No return/refund data" }));
+      return res.end(JSON.stringify({ message: "No return/refund data found" }));
     }
 
     let parsedData = {};
@@ -102,27 +129,29 @@ const server = http.createServer(async (req, res) => {
     try {
       const rawValue = metafieldData.metafields[0].value;
       parsedData = typeof rawValue === "string" ? JSON.parse(rawValue) : rawValue;
-    } catch {
-      return res.end(JSON.stringify({ message: "Parse error" }));
+    } catch (e) {
+      console.log("Parse error:", e);
+      return res.end(JSON.stringify({ message: "Error parsing metafield" }));
     }
 
-    // =====================
-    // RETURN STATUS
-    // =====================
+    // ======================
+    // CASE 2: RETURN STATUS
+    // ======================
     if (action === "return") {
 
       const returnData = Object.values(parsedData).map(item => ({
         return_status: item.return?.latest_status?.status || "N/A",
         shipment_status: item.shipment?.latest_status?.status || "N/A",
-        logistics_partner: item.shipment?.logistics_partner || "N/A"
+        logistics_partner: item.shipment?.logistics_partner || "N/A",
+        tracking_id: item.shipment?.tracking_id || "N/A"
       }));
 
       return res.end(JSON.stringify({ returnData }));
     }
 
-    // =====================
-    // REFUND STATUS
-    // =====================
+    // ======================
+    // CASE 3: REFUND STATUS
+    // ======================
     if (action === "refund") {
 
       const refundData = Object.values(parsedData).map(item => ({
@@ -143,6 +172,9 @@ const server = http.createServer(async (req, res) => {
 
 });
 
+// ======================
+// START SERVER
+// ======================
 server.listen(3000, '0.0.0.0', () => {
-  console.log("Server running on port 3000");
+  console.log("🚀 Server running on port 3000");
 });
