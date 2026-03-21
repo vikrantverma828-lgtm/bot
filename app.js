@@ -2,7 +2,12 @@ const http = require('http');
 const https = require('https');
 
 const SHOP = 'libasdelhi.myshopify.com';
-const ACCESS_TOKEN = "PASTE_YOUR_TOKEN_HERE"; // TEMP for testing
+const ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN; // Set this in AWS Lambda / EC2 env vars
+
+if (!ACCESS_TOKEN) {
+  console.error("❌ SHOPIFY_ACCESS_TOKEN environment variable is not set!");
+  process.exit(1);
+}
 
 // ======================
 // SAFE FETCH FUNCTION
@@ -20,6 +25,14 @@ function fetchData(url) {
 
       console.log("Status Code:", res.statusCode);
 
+      if (res.statusCode === 401) {
+        return reject("Unauthorized - check your Shopify access token");
+      }
+
+      if (res.statusCode === 404) {
+        return reject("Resource not found (404)");
+      }
+
       res.on('data', chunk => data += chunk);
 
       res.on('end', () => {
@@ -32,23 +45,31 @@ function fetchData(url) {
         try {
           resolve(JSON.parse(data));
         } catch (err) {
-          console.log("Invalid JSON:", data);
-          reject("Invalid JSON");
+          console.log("Invalid JSON:", data.substring(0, 200));
+          reject("Invalid JSON response from Shopify");
         }
       });
     });
 
     req.on('error', (err) => {
-      console.log("HTTP Error:", err);
-      reject(err);
+      console.log("HTTP Error:", err.message);
+      reject(err.message);
     });
 
-    req.setTimeout(5000, () => {
+    req.setTimeout(10000, () => {
       console.log("Timeout hit");
       req.destroy();
-      reject("Timeout");
+      reject("Request timed out");
     });
   });
+}
+
+// ======================
+// SEND RESPONSE HELPER
+// ======================
+function sendJSON(res, statusCode, payload) {
+  res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(payload));
 }
 
 // ======================
@@ -58,31 +79,36 @@ const server = http.createServer(async (req, res) => {
 
   console.log("Incoming request:", req.url);
 
-  res.setHeader('Content-Type', 'application/json');
-
   if (!req.url.startsWith('/support')) {
-    return res.end(JSON.stringify({ message: "API running" }));
+    return sendJSON(res, 200, { message: "API running" });
   }
 
-  const urlObj = new URL(req.url, `http://${req.headers.host}`);
+  // Safe URL parsing
+  let urlObj;
+  try {
+    urlObj = new URL(req.url, `http://${req.headers.host}`);
+  } catch (e) {
+    return sendJSON(res, 400, { message: "Invalid request URL" });
+  }
+
   const orderId = urlObj.searchParams.get('orderId');
   const action = urlObj.searchParams.get('action');
 
   if (!orderId || !action) {
-    return res.end(JSON.stringify({ message: "Missing parameters" }));
+    return sendJSON(res, 400, { message: "Missing parameters: orderId and action are required" });
   }
 
   try {
     // ======================
     // STEP 1: FETCH ORDER
     // ======================
-    console.log("Calling Order API...");
+    console.log("Calling Order API for:", orderId);
 
     const orderAPI = `https://${SHOP}/admin/api/2024-01/orders.json?name=%23${orderId}&status=any`;
     const orderData = await fetchData(orderAPI);
 
     if (!orderData.orders || orderData.orders.length === 0) {
-      return res.end(JSON.stringify({ message: "Order not found" }));
+      return sendJSON(res, 404, { message: `Order #${orderId} not found` });
     }
 
     const order = orderData.orders[0];
@@ -101,15 +127,17 @@ const server = http.createServer(async (req, res) => {
       const fulfilmentData = await fetchData(fulfilmentAPI);
 
       if (!fulfilmentData.fulfillments || fulfilmentData.fulfillments.length === 0) {
-        return res.end(JSON.stringify({ message: "Order placed but not shipped yet" }));
+        return sendJSON(res, 200, { message: "Order placed but not shipped yet" });
       }
 
       const shipments = fulfilmentData.fulfillments.map(f => ({
-        status: f.shipment_status,
-        tracking_url: f.tracking_url
+        status: f.shipment_status || "N/A",
+        tracking_url: f.tracking_url || "N/A",
+        tracking_number: f.tracking_number || "N/A",
+        carrier: f.tracking_company || "N/A"
       }));
 
-      return res.end(JSON.stringify({ shipments }));
+      return sendJSON(res, 200, { shipments });
     }
 
     // ======================
@@ -121,7 +149,7 @@ const server = http.createServer(async (req, res) => {
     const metafieldData = await fetchData(metafieldAPI);
 
     if (!metafieldData.metafields || metafieldData.metafields.length === 0) {
-      return res.end(JSON.stringify({ message: "No return/refund data found" }));
+      return sendJSON(res, 200, { message: "No return/refund data found for this order" });
     }
 
     let parsedData = {};
@@ -130,8 +158,8 @@ const server = http.createServer(async (req, res) => {
       const rawValue = metafieldData.metafields[0].value;
       parsedData = typeof rawValue === "string" ? JSON.parse(rawValue) : rawValue;
     } catch (e) {
-      console.log("Parse error:", e);
-      return res.end(JSON.stringify({ message: "Error parsing metafield" }));
+      console.log("Metafield parse error:", e.message);
+      return sendJSON(res, 500, { message: "Error parsing return/refund data" });
     }
 
     // ======================
@@ -146,7 +174,7 @@ const server = http.createServer(async (req, res) => {
         tracking_id: item.shipment?.tracking_id || "N/A"
       }));
 
-      return res.end(JSON.stringify({ returnData }));
+      return sendJSON(res, 200, { returnData });
     }
 
     // ======================
@@ -160,14 +188,14 @@ const server = http.createServer(async (req, res) => {
         mode: item.refund?.mode || "N/A"
       }));
 
-      return res.end(JSON.stringify({ refundData }));
+      return sendJSON(res, 200, { refundData });
     }
 
-    return res.end(JSON.stringify({ message: "Invalid action" }));
+    return sendJSON(res, 400, { message: "Invalid action. Use: order | return | refund" });
 
   } catch (err) {
     console.log("ERROR:", err);
-    return res.end(JSON.stringify({ message: "Something went wrong" }));
+    return sendJSON(res, 500, { message: "Something went wrong", detail: err.toString() });
   }
 
 });
