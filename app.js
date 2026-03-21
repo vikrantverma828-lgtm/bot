@@ -17,29 +17,39 @@ function fetchData(url) {
     };
 
     const req = https.get(url, options, (res) => {
+
       let data = '';
+
+      console.log("Shopify Status Code:", res.statusCode);
 
       res.on('data', chunk => data += chunk);
 
       res.on('end', () => {
+        console.log("Shopify Response Received");
+
+        if (!data) {
+          return reject("Empty response from Shopify");
+        }
+
         try {
-          const parsed = JSON.parse(data);
-          resolve(parsed);
+          resolve(JSON.parse(data));
         } catch (err) {
-          console.log("JSON Parse Error:", data);
-          reject("Invalid JSON response");
+          console.log("Invalid JSON:", data);
+          reject("Invalid JSON");
         }
       });
+
     });
 
     req.on('error', (err) => {
-      console.log("HTTP Error:", err);
+      console.log("Request error:", err);
       reject(err);
     });
 
     req.setTimeout(5000, () => {
+      console.log("Shopify API Timeout");
       req.destroy();
-      reject("Request Timeout");
+      reject("Timeout");
     });
 
   });
