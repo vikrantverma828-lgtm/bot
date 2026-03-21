@@ -140,6 +140,39 @@ const server = http.createServer(async (req, res) => {
 
 });
 
+function fetchData(url) {
+  return new Promise((resolve, reject) => {
+
+    const options = {
+      headers: {
+        'X-Shopify-Access-Token': ACCESS_TOKEN
+      }
+    };
+
+    const req = https.get(url, options, (res) => {
+      let data = '';
+
+      res.on('data', chunk => data += chunk);
+
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (err) {
+          reject("Invalid JSON");
+        }
+      });
+    });
+
+    req.on('error', (err) => reject(err));
+
+    req.setTimeout(5000, () => {
+      req.destroy();
+      reject("Request Timeout");
+    });
+
+  });
+}
+
 server.listen(3000, '0.0.0.0', () => {
   console.log("Server running on port 3000");
 });
