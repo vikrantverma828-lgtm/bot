@@ -53,16 +53,12 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
 
   if (req.url.startsWith('/support')) {
+  console.log("Request received");
 
-    console.log("Incoming request:", req.url);
-
-    const urlObj = new URL(req.url, `http://${req.headers.host}`);
-    const orderId = urlObj.searchParams.get('orderId');
-    const action = urlObj.searchParams.get('action');
-
-    if (!orderId || !action) {
-      return res.end(JSON.stringify({ message: "Missing orderId or action" }));
-    }
+  return res.end(JSON.stringify({
+    message: "Server working fine"
+  }));
+}
 
     try {
       // ======================
